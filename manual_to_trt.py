@@ -16,6 +16,7 @@ from progressbar import progressbar
 
 # You can set the logger severity higher to suppress messages (or lower to display more messages).
 TRT_LOGGER = trt.Logger(trt.Logger.WARNING)
+EXPLICIT_BATCH = 1 << (int)(trt.NetworkDefinitionCreationFlag.EXPLICIT_BATCH)
 device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
 data_dir = 'test_images'
 batch_size = 1
@@ -30,27 +31,28 @@ class ModelData(object):
     DTYPE = trt.float32
 
 
+# TensorRT does not provide the function of BN layer, but only provides the most basic scale layer 
+# It needs to be implemented manually according to BN formula
 def add_bn_layer(network, last_layer, weights, bn_name: str):
-    names = locals()
-    names[bn_name + r'_w'] = weights[bn_name + r'.weight'].numpy()
-    names[bn_name + r'_b'] = weights[bn_name + r'.bias'].numpy()
-    names[bn_name + r'._running_mean'] = weights[bn_name + r'.running_mean'].numpy()
-    names[bn_name + r'_running_var'] = weights[bn_name + r'.running_var'].numpy()
-    names[bn_name + r'_scale'] = names[bn_name + r'_w'] / np.sqrt(names[bn_name + r'_running_var'] + 1e-05)
-    names[bn_name + r'_bias'] = names[bn_name + r'_b'] - names[bn_name + r'_running_mean'] * names[bn_name + r'_scale']
-    names[bn_name + r'_power'] = np.ones_like(names[bn_name + r'_scale'])
+    gamma = weights[bn_name + r'.weight'].numpy()
+    bata = weights[bn_name + r'.bias'].numpy()
+    mean = weights[bn_name + r'.running_mean'].numpy()
+    var = weights[bn_name + r'.running_var'].numpy()
+    scale = gamma / np.sqrt(var + 1e-05)
+    bias = beta - mean * scale
+    power = np.ones_like(scale)
     
-    return network.add_scale(last_layer.get_output(0), trt.ScaleMode.CHANNEL, names[bn_name + r'_bias'], names[bn_name + r'_scale'], names[bn_name + r'_power'])
+    return network.add_scale(last_layer.get_output(0), trt.ScaleMode.CHANNEL, bias, scale, power)
 
-
+# bias is set False in Conv2d, seen in print(model)
 def add_conv_layer(network, last_layer, weights, conv_name: str, out_put_maps, kernel_shape, stride, padding):
     names = locals()
-    names[conv_name + r'_w'] = weights[conv_name + r'.weight'].numpy()
-    names[conv_name] = network.add_convolution(last_layer.get_output(0), out_put_maps, kernel_shape, names[conv_name + r'_w'])
-    names[conv_name].stride = stride
-    names[conv_name].padding = padding
+    weight = weights[conv_name + r'.weight'].numpy()
+    conv = network.add_convolution(last_layer.get_output(0), out_put_maps, kernel_shape, weight)
+    conv.stride = stride
+    conv.padding = padding
     
-    return names[conv_name]
+    return conv
     
 def add_downsample(network, last_layer, weights, down_name: str, out_put_maps):
     downsample_conv = add_conv_layer(network, last_layer, weights, down_name + r'.0', out_put_maps, (1, 1), (2, 2), (0, 0))
@@ -72,22 +74,8 @@ def basic_block(network, weights, last_layer, inch: int, outch: int, stride: int
     
     relu2 = network.add_activation(ew.get_output(0), type=trt.ActivationType.RELU)
     return relu2
-    
-
-def load_normalized_test_case(test_image, pagelocked_buffer):
-    # Converts the input image to a CHW Numpy array
-    def normalize_image(image):
-        # Resize, antialias and transpose the image to CHW.
-        b, c, h, w = ModelData.INPUT_SHAPE
-        image_arr = np.asarray(image.resize((w, h), Image.ANTIALIAS)).transpose([2, 0, 1]).astype(trt.nptype(ModelData.DTYPE)).ravel()
-        # This particular ResNet50 model requires some preprocessing, specifically, mean normalization.
-        return (image_arr / 255.0 - 0.45) / 0.225
-
-    # Normalize the image and copy to pagelocked memory.
-    img = normalize_image(Image.open(test_image))
-    np.copyto(pagelocked_buffer, img)
    
-
+# see all the weights name in model.state_dict().keys()
 def populate_network(network, weights):
     # Configure the network layers based on the weights provided.
     input_tensor = network.add_input(name=ModelData.INPUT_NAME, dtype=ModelData.DTYPE, shape=ModelData.INPUT_SHAPE)
@@ -118,7 +106,7 @@ def populate_network(network, weights):
     relu8 = basic_block(network, weights, relu7, 256, 512, 2, 'layer4.0.')
     relu9 = basic_block(network, weights, relu8, 512, 512, 1, 'layer4.1.')
     
-    
+    # alternative way to implement pytorch adaptiveAvgPool2d
     output_size = (1, 1)
     avg_input_tensor = relu9.get_output(0)
     stride = (avg_input_tensor.shape[-2] // output_size[-2], avg_input_tensor.shape[-1] // output_size[-1])
@@ -138,12 +126,13 @@ def populate_network(network, weights):
 def build_engine(weights):
     # For more information on TRT basics, refer to the introductory samples.
     builder = trt.Builder(TRT_LOGGER)
-    network = builder.create_network(common.EXPLICIT_BATCH)
+    network = builder.create_network(EXPLICIT_BATCH)
     config = builder.create_builder_config()
     runtime = trt.Runtime(TRT_LOGGER)
 
-    config.max_workspace_size = common.GiB(1)
+    config.max_workspace_size = 1 << 30
     config.set_flag(trt.BuilderFlag.GPU_FALLBACK)
+    # uncomment this line to use FP16 mode
     # config.set_flag(trt.BuilderFlag.FP16)
     # Populate the network using weights from the PyTorch model.
     populate_network(network, weights)
