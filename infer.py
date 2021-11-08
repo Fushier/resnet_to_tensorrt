@@ -17,7 +17,7 @@ class HostDeviceMem(object):
         return self.__str__()
 
 class Infer(object):
-    def _load_engine(self, engint_path):
+    def _load_engine(self, engine_path):
         with open(engine_path, 'rb') as f, trt.Runtime(self.trt_logger) as runtime:
             return runtime.deserialize_cuda_engine(f.read())
     
@@ -25,22 +25,18 @@ class Infer(object):
     def __init__(self, engine_path: str):
         """Initialize TensorRT plugins, engine and conetxt."""
 
-        self.inference_fn = do_inference if trt.__version__[0] < '7' \
-                                         else do_inference_v2
         self.trt_logger = trt.Logger(trt.Logger.INFO)
-        self.engine = self._load_engine()
+        self.engine = self._load_engine(engine_path)
 
         try:
             self.context = self.engine.create_execution_context()
-            self.inputs, self.outputs, self.bindings, self.stream = \
-                allocate_buffers(self.engine)
+            self.inputs, self.outputs, self.bindings, self.stream = self.allocate_buffers(self.engine)
         except Exception as e:
             raise RuntimeError('fail to allocate CUDA resources') from e
 
-    def inference(self, img_path):
-        img = pre_process(img_path)
+    def inference(self, img):
         self.inputs[0].host = np.ascontiguousarray(img)
-        trt_outputs = self.inference_fn(
+        trt_outputs = self.do_inference_v2(
             context=self.context,
             bindings=self.bindings,
             inputs=self.inputs,
@@ -50,16 +46,6 @@ class Infer(object):
         return trt_outputs
 
     
-    def pre_process(self, img_path):
-        img = cv2.imread(img_path)
-        img = cv2.resize(img, (224, 224))
-        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-        img = img.transpose((2, 0, 1)).astype(np.float32)
-        img /= 255.0
-        img[:, :,] -= (np.float32(0.485), np.float32(0.456), np.float32(0.406))
-        img[:, :,] /= (np.float32(0.229), np.float32(0.224), np.float32(0.225))
-        return img
-        
     
     def allocate_buffers(self, engine):
         """Allocates all host/device in/out buffers required for an engine."""

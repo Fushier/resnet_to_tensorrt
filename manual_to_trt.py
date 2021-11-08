@@ -35,7 +35,7 @@ class ModelData(object):
 # It needs to be implemented manually according to BN formula
 def add_bn_layer(network, last_layer, weights, bn_name: str):
     gamma = weights[bn_name + r'.weight'].numpy()
-    bata = weights[bn_name + r'.bias'].numpy()
+    beta = weights[bn_name + r'.bias'].numpy()
     mean = weights[bn_name + r'.running_mean'].numpy()
     var = weights[bn_name + r'.running_var'].numpy()
     scale = gamma / np.sqrt(var + 1e-05)
@@ -46,7 +46,6 @@ def add_bn_layer(network, last_layer, weights, bn_name: str):
 
 # bias is set False in Conv2d, seen in print(model)
 def add_conv_layer(network, last_layer, weights, conv_name: str, out_put_maps, kernel_shape, stride, padding):
-    names = locals()
     weight = weights[conv_name + r'.weight'].numpy()
     conv = network.add_convolution(last_layer.get_output(0), out_put_maps, kernel_shape, weight)
     conv.stride = stride
@@ -56,7 +55,7 @@ def add_conv_layer(network, last_layer, weights, conv_name: str, out_put_maps, k
     
 def add_downsample(network, last_layer, weights, down_name: str, out_put_maps):
     downsample_conv = add_conv_layer(network, last_layer, weights, down_name + r'.0', out_put_maps, (1, 1), (2, 2), (0, 0))
-    return add_bn_layer(network, downsample_conv, weights, bn_name + r'.1')
+    return add_bn_layer(network, downsample_conv, weights, down_name + r'.1')
 
 
 def basic_block(network, weights, last_layer, inch: int, outch: int, stride: int, layer_name: str):
@@ -64,7 +63,7 @@ def basic_block(network, weights, last_layer, inch: int, outch: int, stride: int
     bn1 = add_bn_layer(network, conv1, weights, layer_name + 'bn1')
     relu1 = network.add_activation(bn1.get_output(0), type=trt.ActivationType.RELU)
     
-    conv2 = add_conv_layer(network, relu1, weights, layer_name + 'conv2', outch, (3, 3), (stride, stride), (1, 1))
+    conv2 = add_conv_layer(network, relu1, weights, layer_name + 'conv2', outch, (3, 3), (1, 1), (1, 1))
     bn2 = add_bn_layer(network, conv2, weights, layer_name + 'bn2')
     if inch != outch:
         bn3 = add_downsample(network, last_layer, weights, layer_name + 'downsample', outch)
@@ -112,13 +111,13 @@ def populate_network(network, weights):
     stride = (avg_input_tensor.shape[-2] // output_size[-2], avg_input_tensor.shape[-1] // output_size[-1])
 
     kernel_size = stride
-    adaptiveAvgPool2d = network.add_pooling(input=avg_input_tensor, type=trt.PoolingType.AVERAGE, window_size=kernel_size)
-    adaptiveAvgPool2d.stride = stride
+    adaptive_avg_Pool = network.add_pooling(input=avg_input_tensor, type=trt.PoolingType.AVERAGE, window_size=kernel_size)
+    adaptive_avg_Pool.stride = stride
     
     
     fc_w = weights['fc.weight'].numpy()
     fc_b = weights['fc.bias'].numpy()
-    fc = network.add_fully_connected(adaptiveAvgPool2d.get_output(0), ModelData.OUTPUT_SIZE, fc_w, fc_b)
+    fc = network.add_fully_connected(adaptive_avg_Pool.get_output(0), ModelData.OUTPUT_SIZE, fc_w, fc_b)
 
     fc.get_output(0).name = ModelData.OUTPUT_NAME
     network.mark_output(tensor=fc.get_output(0))
