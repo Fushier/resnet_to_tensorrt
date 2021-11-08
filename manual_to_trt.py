@@ -1,7 +1,6 @@
 import os
 import sys
 import time
-# This sample uses an MNIST PyTorch model to create a TensorRT Inference Engine
 import torchvision
 import torch
 import numpy as np
@@ -155,7 +154,6 @@ def main():
     model = torchvision.models.resnet18(pretrained=True)
     labels = open(ModelData.LABEL_PATH, 'r').read().split('\n')
 
-    # Train the PyTorch model
     weights = model.state_dict()
     if os.path.exists(engine_path) == False:
         # Do inference with TensorRT.
@@ -165,39 +163,13 @@ def main():
         with open(engine_path, 'wb') as f:
             f.write(engine.serialize())
         print('engine serialize finished')
-    # Build an engine, allocate buffers and create a stream.
-    # For more information on buffer allocation, refer to the introductory samples.
 
-    # inputs, outputs, bindings, stream = common.allocate_buffers(engine)
-    # load_normalized_test_case('reflex_camera.jpeg', inputs[0].host)
-
-    # context = engine.create_execution_context()
-    # t1 = time.time()
-    # trt_output = common.do_inference_v2(context, bindings=bindings, inputs=inputs, outputs=outputs, stream=stream)
-    # print('trt time:', str(time.time() - t1))
-    # trt_pred = labels[np.argmax(trt_output[0])]
-    # print('trt pred:', trt_pred)
-    # print(trt_output[0][:10])
-
-    # transform = transforms.Compose([
-    #         transforms.Resize([224, 224]),
-    #         transforms.ToTensor(),
-    #         transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
-    #     ])
     model = model.eval().to(device)
-    # img = transform(Image.open('reflex_camera.jpeg').convert('RGB')).unsqueeze(0)
-    # t3 = time.time()
-    # resnet_output = model(img.to(device)).detach().cpu().numpy()
-    # print('resnet time:', str(time.time() - t3))
-    # resnet_pred = labels[np.argmax(resnet_output[0])]
-    # print('resnet pred:', resnet_pred)
-    # print(resnet_output[0][:10])
     infer_obj = Infer(engine_path)
     dataset = TestImageDataset(data_dir)
     dataloader = torch.utils.data.DataLoader(dataset, batch_size=batch_size)
     torch_preds = list()
     trt_preds = list()
-    # jpgs = [os.path.join(data_dir, j) for j in os.listdir(data_dir)]
     print('inference with TensorRT...')
     t1 = time.time()
     for data in progressbar(dataloader):
